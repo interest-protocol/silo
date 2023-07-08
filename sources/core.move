@@ -124,23 +124,66 @@ module silo::silo_core {
     ctx: &mut TxContext
   ) {
    assert!(!market.lock, ERROR_FLASH_LOAN_UNDERWAY);
+   
+   internal_deposit<SiloMarket<X, Y>, X>(
+    object::uid_to_inner(&market.id),
+    &mut market.coin_x_data,
+    &mut market.accounts_x,
+    &mut market.balance_x, 
+    clock_object,
+    asset,
+    sender,
+    ctx
+   );
+  }
 
-    // We need to register his account on the first deposit call, if it does not exist.
-    init_account(&mut market.accounts_x, sender, ctx);
+  public(friend) fun deposit_y<X, Y>(
+    market: &mut Silo<X, Y>, 
+    clock_object: &Clock,
+    asset: Coin<Y>,
+    sender: address,
+    ctx: &mut TxContext
+  ) {
+   assert!(!market.lock, ERROR_FLASH_LOAN_UNDERWAY);
+   
+   internal_deposit<SiloMarket<X, Y>, Y>(
+    object::uid_to_inner(&market.id),
+    &mut market.coin_y_data,
+    &mut market.accounts_y,
+    &mut market.balance_y, 
+    clock_object,
+    asset,
+    sender,
+    ctx
+   );
+  }
 
-    let cash = balance::value(&market.balance_x);
+  fun internal_deposit<S, T>(
+    silo_id: ID,
+    coin_data: &mut CoinData,
+    accounts: &mut ObjectTable<address, Account>,
+    cash_balance: &mut Balance<T>, 
+    clock_object: &Clock,
+    asset: Coin<T>,
+    sender: address,
+    ctx: &mut TxContext
+  ) {
+       // We need to register his account on the first deposit call, if it does not exist.
+    init_account(accounts, sender, ctx);
 
-    accrue_internal(&mut market.coin_x_data, clock_object, cash);
+    let cash = balance::value(cash_balance);
 
-    let account = object_table::borrow_mut(&mut market.accounts_x, sender);
+    accrue_internal(coin_data, clock_object, cash);
+
+    let account = object_table::borrow_mut(accounts, sender);
 
     let pending_rewards = 0;
 
     if (account.shares > 0) 
         pending_rewards = (
           ((account.shares as u256) * 
-          market.coin_x_data.accrued_collateral_rewards_per_share) / 
-          (market.coin_x_data.decimals_factor as u256)) - 
+          coin_data.accrued_collateral_rewards_per_share) / 
+          (coin_data.decimals_factor as u256)) - 
           account.collateral_rewards_paid;
       
       // Save the value of the coin being deposited in memory
@@ -148,22 +191,22 @@ module silo::silo_core {
 
       // Update the collateral rebase. 
       // We round down to give the edge to the protocol
-      let shares = rebase::add_elastic(&mut market.coin_x_data.collateral_rebase, asset_value, false);
+      let shares = rebase::add_elastic(&mut coin_data.collateral_rebase, asset_value, false);
 
       // Deposit the Coin<T> in the market
-      balance::join(&mut market.balance_x, coin::into_balance(asset));
+      balance::join(cash_balance, coin::into_balance(asset));
 
       // Assign the additional shares to the sender
       account.shares = account.shares + shares;
       // Consider all rewards earned by the sender paid
-      account.collateral_rewards_paid = ((account.shares as u256) * market.coin_x_data.accrued_collateral_rewards_per_share) / (market.coin_x_data.decimals_factor as u256);
+      account.collateral_rewards_paid = ((account.shares as u256) * coin_data.accrued_collateral_rewards_per_share) / (coin_data.decimals_factor as u256);
 
       // Update the rewards
       account.collateral_rewards = account.collateral_rewards + (pending_rewards as u64);
 
       emit(
-        Deposit<SiloMarket<X, Y>, X> {
-          silo_id: object::uid_to_inner(&market.id),
+        Deposit<S, T> {
+          silo_id,
           shares,
           value: asset_value,
           pending_rewards,
